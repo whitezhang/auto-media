@@ -1,4 +1,10 @@
 <!doctype html>
+<style>
+    .nowrap-button {
+        white-space: nowrap;
+    }
+</style>
+
 <title>Upload File</title>
 <h1>Click to Upload</h1>
 <div>
@@ -8,15 +14,38 @@
   </form>
 </div>
 <h2>Uploaded Files</h2>
-<ul>
-  {% for file_name in file_names %}
-    <li>
-      {{ file_name }}
-      <form method="post" action="/speech2text">
-        <input type="hidden" name="file_name" value="{{ file_name }}">
-        <button type="submit">音频转文字</button>
-      </form>
-    </li>
-  {% endfor %}
-</ul>
+<table border="1">
+  <tr>
+    <th>序号</th>
+    <th>音频文件名</th>
+    <th>文本文件名</th>
+    <th>文本变体文件名</th>
+    <th>音频变体文件名</th>
+  </tr>
+  {% for index, names in file_names.items() %}
+    <tr>
+      <td>{{ index }}</td>
+      <td>{{ names.mp4_name }}
+          <form method="post" action="/speech2text">
+            <input type="hidden" name="file_name" value="{{ names.mp4_name }}">
+            <button type="submit" class=="nowrap-button">音频转文本</button>
+          </form>
+      </td>
 
+      <td>{{ names.txt_name }}
+          <form method="post" action="/speech2text">
+            <input type="hidden" name="file_name" value="{{ names.txt_name }}">
+            <button type="submit" class="nowrap-button">文本重写</button>
+          </form>
+      </td>
+
+      <td>{{ names.variant_txt_name }}
+          <form method="post" action="/speech2text">
+            <input type="hidden" name="file_name" value="{{ names.variant_txt_name }}">
+            <button type="submit" class="nowrap-button">文本变体文件名</button>
+          </form>
+      </td>
+      <td>{{ names.variant_mp4_name }}</td>
+    </tr>
+  {% endfor %}
+</table>
