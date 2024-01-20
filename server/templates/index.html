@@ -1,0 +1,22 @@
+<!doctype html>
+<title>Upload File</title>
+<h1>Click to Upload</h1>
+<div>
+  <form class="upload-form" enctype="multipart/form-data" action="/upload" method="post">
+    <input type="file" name="file" accept=".mp4, .mov">
+    <button type="submit">Upload</button>
+  </form>
+</div>
+<h2>Uploaded Files</h2>
+<ul>
+  {% for file_name in file_names %}
+    <li>
+      {{ file_name }}
+      <form method="post" action="/speech2text">
+        <input type="hidden" name="file_name" value="{{ file_name }}">
+        <button type="submit">音频转文字</button>
+      </form>
+    </li>
+  {% endfor %}
+</ul>
+
