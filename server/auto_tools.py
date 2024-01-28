@@ -1,6 +1,11 @@
 import os
 import cv2
+import whisper
 from skimage import metrics
+from moviepy.video.io.VideoFileClip import VideoFileClip
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
 
 class AutoMedia(object):
     def __init__(self, video_path, output_folder):
@@ -15,9 +20,20 @@ class AutoMedia(object):
 
         self.video_name = os.path.basename(video_path)
         self.frame_count = 0
+        self.speech_file_names = []
+
+        self.model = whisper.load_model("medium")
 
     def get_frame_file_path(self, index):
         name = f'frame_{index}.jpg'
+        return os.path.join(self.output_folder, name)
+
+    def get_audio_file_path(self, st, et):
+        name = f'audio_{st}_{et}.mp4'
+        return os.path.join(self.output_folder, name)
+
+    def get_speech_file_path(self, st, et):
+        name = f'audio_{st}_{et}.txt'
         return os.path.join(self.output_folder, name)
 
     def extract_frames(self, video_path):
@@ -28,6 +44,8 @@ class AutoMedia(object):
 
         cap = cv2.VideoCapture(video_path)
         fps = int(cap.get(cv2.CAP_PROP_FPS))
+        logging.debug(f'video fps: {fps}')
+
         os.makedirs(self.output_folder, exist_ok=True)
         self.frame_count = 0
 
@@ -48,6 +66,7 @@ class AutoMedia(object):
     def find_breakpoint(self, image_path1, image_path2):
         """
         找断点
+        重召回
         """
         if not os.path.exists(image_path1):
             return False
@@ -66,8 +85,8 @@ class AutoMedia(object):
 
         # 计算 SSIM
         ssim_score, _ = metrics.structural_similarity(image1_gray, image2_gray, full=True)
-        if ssim_score < .1:
-            print(f"{image_path1}-{image_path2} SSIM Score: {round(ssim_score, 2)}")
+        logging.debug(f"{image_path1}-{image_path2} SSIM Score: {round(ssim_score, 2)}")
+        if ssim_score < .2:
             return True
         return False
 
@@ -83,7 +102,8 @@ class AutoMedia(object):
 
     def cluster_breakpoints(self, breakpoints):
         """
-        聚合10s以内的断点
+        聚合断点
+        假设：单个画面最长时间不超过10s
         """
         clustered_pts = []
         clustered_pts.append(breakpoints[0])
@@ -94,9 +114,16 @@ class AutoMedia(object):
             if abs(pt - last_pt) > 10:
                 clustered_pts.append(pt)
                 last_pt = pt
-        print(breakpoints)
-        print(clustered_pts)
+        logging.debug('pts:%s' % (','.join(map(str, breakpoints))))
+        logging.debug('cpts:%s' % (','.join(map(str, clustered_pts))))
         return clustered_pts
+
+    def speech2text(self, input_file_name, output_file_name):
+        prompt='以下是普通话的句子'
+        result = self.model.transcribe(input_file_name, language='zh', initial_prompt=prompt)
+        result_text = result['text']
+        with open(output_file_name, 'w', encoding='utf-8') as out:
+            out.write(result_text)
 
     def process_video(self, video_path, output_path):
         # 打开视频文件
@@ -137,15 +164,44 @@ class AutoMedia(object):
         out.release()
         cv2.destroyAllWindows()
 
-    def process_sounds(self, vodeo_path, output_path):
+    def extract_video_segment(self, video_path, start_time, end_time, output_path):
+        # 打开视频文件
+        video_clip = VideoFileClip(video_path)
+
+        # 切分指定时间范围的视频片段
+        cut_clip = video_clip.subclip(start_time, end_time)
+
+        # 保存视频片段
+        cut_clip.write_videofile(output_path, codec='libx264', audio_codec='aac')
+
+        # 关闭视频文件
+        video_clip.close()
+
+    def process_sounds(self, video_path, output_path):
         frame_file_names = self.extract_frames(self.video_path)
         breakpoints = self.cal_breakpoints(frame_file_names)
         breakpoints = self.cluster_breakpoints(breakpoints)
-        print(breakpoints)
+
+        offset = 2
+        for i in range(len(breakpoints) - 1):
+            # 加冗余
+            st = breakpoints[i] - offset if breakpoints[i] - offset > 0 else 0
+            et = breakpoints[i + 1] + offset
+
+            audio_file_name = self.get_audio_file_path(st, et)
+            speech_file_name = self.get_speech_file_path(st, et)
+            logging.debug(f'Done:{audio_file_name},{speech_file_name}\
+                        {i}/{len(breakpoints) - 1}')
+            self.extract_video_segment(video_path, st, et, audio_file_name)
+            self.speech2text(audio_file_name, speech_file_name)
+            # speech文本按序存入
+            self.speech_file_names.append(speech_file_name)
 
 if __name__ == "__main__":
     upload_path = './uploads'
     mid_path = './mids'
+    #auto = AutoMedia('', '')
+    #auto.speech2text('./mids/audio_0_20.mp4', './mids/audio_0_20.txt')
 
     for file_name in os.listdir(upload_path):
         file_path = os.path.join(upload_path, file_name)
@@ -155,7 +211,7 @@ if __name__ == "__main__":
             # file_name: video.mp4
             print(f"正在处理文件: {file_path}")
             auto = AutoMedia(file_path, mid_path)
-            auto.process_video(file_path, 'a.mp4')
-            #auto.process_sounds(file_path, 'a.txt')
+            #auto.process_video(file_path, 'a.mp4')
+            auto.process_sounds(file_path, 'a.txt')
 
 
