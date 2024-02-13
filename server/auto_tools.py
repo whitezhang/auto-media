@@ -4,6 +4,7 @@ import whisper
 from skimage import metrics
 from moviepy.video.io.VideoFileClip import VideoFileClip
 import logging
+import subprocess
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -22,7 +23,8 @@ class AutoMedia(object):
         self.frame_count = 0
         self.speech_file_names = []
 
-        self.model = whisper.load_model("medium")
+        #self.model = whisper.load_model("medium")
+        self.model = whisper.load_model("large")
 
     def get_frame_file_path(self, index):
         name = f'frame_{index}.jpg'
@@ -90,7 +92,7 @@ class AutoMedia(object):
             return True
         return False
 
-    def cal_breakpoints(self, frame_file_names):
+    def cal_video_vector(self, frame_file_names):
         breakpoints = []
         for i in range(len(frame_file_names) - 1):
             frame_path1 = frame_file_names[i]
@@ -99,24 +101,6 @@ class AutoMedia(object):
             if is_breakpoint:
                 breakpoints.append(i)
         return breakpoints
-
-    def cluster_breakpoints(self, breakpoints):
-        """
-        聚合断点
-        假设：单个画面最长时间不超过10s
-        """
-        clustered_pts = []
-        clustered_pts.append(breakpoints[0])
-
-        last_pt = breakpoints[0]
-        for i in range(1, len(breakpoints)):
-            pt = breakpoints[i]
-            if abs(pt - last_pt) > 10:
-                clustered_pts.append(pt)
-                last_pt = pt
-        logging.debug('pts:%s' % (','.join(map(str, breakpoints))))
-        logging.debug('cpts:%s' % (','.join(map(str, clustered_pts))))
-        return clustered_pts
 
     def speech2text(self, input_file_name, output_file_name):
         prompt='以下是普通话的句子'
@@ -177,41 +161,148 @@ class AutoMedia(object):
         # 关闭视频文件
         video_clip.close()
 
-    def process_sounds(self, video_path, output_path):
-        frame_file_names = self.extract_frames(self.video_path)
-        breakpoints = self.cal_breakpoints(frame_file_names)
-        breakpoints = self.cluster_breakpoints(breakpoints)
+    def cal_audio_vector(self, cost, input_path, output_path):
+        lines = []
+        total_words = 0
+        with open(input_path) as fin:
+            for line in fin:
+                line = line.strip()
+                lines.append(line)
+                total_words += len(line)
 
-        offset = 2
-        for i in range(len(breakpoints) - 1):
-            # 加冗余
-            st = breakpoints[i] - offset if breakpoints[i] - offset > 0 else 0
-            et = breakpoints[i + 1] + offset
+        acc_cost = 0
+        prts = []
+        for line in lines:
+            length = len(line)
+            ratio = 1. * length / total_words
+            line_cost = cost * ratio
+            acc_cost += line_cost
+            prt = '%s\t%s\n' % (line, acc_cost)
+            prts.append(prt)
 
-            audio_file_name = self.get_audio_file_path(st, et)
-            speech_file_name = self.get_speech_file_path(st, et)
-            logging.debug(f'Done:{audio_file_name},{speech_file_name}\
-                        {i}/{len(breakpoints) - 1}')
-            self.extract_video_segment(video_path, st, et, audio_file_name)
-            self.speech2text(audio_file_name, speech_file_name)
-            # speech文本按序存入
-            self.speech_file_names.append(speech_file_name)
+        with open(output_path, 'w') as fout:
+            for line in prts:
+                fout.write(line)
+
+    def write_video_vector(self, vec):
+        file_path = 'info_video.txt'
+        msg = ','.join(map(str, vec))
+        with open(file_path, 'w') as fout:
+            fout.write(msg)
+            fout.write('\n')
+
+def process_audio(file_path, mid_path):
+    mid_path = './mids'
+    #process_step1(file_path, mid_path)
+    process_step2(file_path, mid_path)
+
+def process_step1(file_path, mid_path):
+    auto = AutoMedia(file_path, mid_path)
+    auto.speech2text(file_path, 'info_audio1.txt')
+    # 放入ChatGPT等工具中，进行断句，生成txt_step2.txt
+
+def process_step2(file_path, mid_path):
+    """
+    Params:
+        total time cost
+        text file
+    """
+    cost = 322
+    auto = AutoMedia(file_path, mid_path)
+    auto.cal_audio_vector(cost, 'info_audio2.txt', 'info_audio3.txt')
+
+def process_video(file_path, mid_path):
+    auto = AutoMedia(file_path, mid_path)
+    frame_file_names = auto.extract_frames(file_path)
+    video_vector = auto.cal_video_vector(frame_file_names)
+    auto.write_video_vector(video_vector)
+    print(video_vector)
+
+def process_match(audio_path, video_path):
+    audio_map = {}
+    with open(audio_path) as fin:
+        for line in fin:
+            line = line.strip('\n').split('\t')
+            if len(line) < 2:
+                continue
+            content = line[0]
+            sec = int(float(line[1]))
+            audio_map[sec] = content
+    print(audio_map)
+
+    # 30min hashmap
+    video_hashmap = [0] * 1800
+    with open(video_path) as fin:
+        for line in fin:
+            line = line.strip('\n').split(',')
+            for k in line:
+                video_hashmap[int(k)] = 1
+    print(video_hashmap)
+
+    match_vector = []
+    for k, v in audio_map.items():
+        offsets = [0, 1, 2, -1, -2]
+        for i in offsets:
+            sec = k + i
+            if video_hashmap[sec]:
+                match_vector.append(k)
+                break
+    return match_vector
+
+def process_cluster(arr, num, st, et):
+    arr.append(st)
+    arr.append(et)
+    arr.sort()
+    while len(arr) > num:
+        min_gap = float('inf')
+        merge_index = 0
+        for i in range(len(arr) - 2):
+            j = i + 2
+            gap = arr[j] - arr[i]
+            if gap < min_gap:
+                min_gap = gap
+                merge_index = i + 1
+        arr.pop(merge_index)
+    return arr
+
+def process_media(ori_path, audio_path, vector, mid_path):
+    # audio_map存储的是截止到ns前的文本内容
+    # vector存储的是时间切片
+    audio_map = [''] * 1800
+    with open(audio_path) as fin:
+        for line in fin:
+            line = line.strip('\n').split('\t')
+            if len(line) < 2:
+                continue
+            content = line[0]
+            sec = int(float(line[1]))
+            audio_map[sec] = content
+    print(audio_map)
+    print(vector)
+
+    for i in range(len(vector) - 1):
+        start_time = vector[i] + 1
+        end_time = vector[i + 1] + 1
+        content = ''.join(audio_map[start_time : end_time])
+        duration = end_time - start_time
+        output_file = '%s/video_seg_%s.mp4' % (mid_path, i)
+        command = f'ffmpeg -ss {start_time} -t {duration} -i {ori_path} -c:v libx264 -c:a aac -strict experimental -b:a 192k {output_file}'
+        subprocess.run(command, shell=True)
+        output_file = '%s/content_seg_%s.txt' % (mid_path, i)
+        with open(output_file, 'w') as fout:
+            fout.write(content)
+            fout.write('\n')
 
 if __name__ == "__main__":
-    upload_path = './uploads'
+    file_path = 'uploads/锈铁1.mp4'
     mid_path = './mids'
-    #auto = AutoMedia('', '')
-    #auto.speech2text('./mids/audio_0_20.mp4', './mids/audio_0_20.txt')
+    #process_audio(file_path, mid_path)
+    #process_video(file_path, mid_path)
+    match_vector = process_match('info_audio3.txt', 'info_video.txt')
+    print(match_vector)
+    cluster_vector = process_cluster(match_vector, 10, 0, 322)
+    print(cluster_vector)
+    process_media(file_path, 'info_audio3.txt', cluster_vector, mid_path)
 
-    for file_name in os.listdir(upload_path):
-        file_path = os.path.join(upload_path, file_name)
-
-        # 检查是否为MP4文件
-        if file_name.endswith(".mp4"):
-            # file_name: video.mp4
-            print(f"正在处理文件: {file_path}")
-            auto = AutoMedia(file_path, mid_path)
-            #auto.process_video(file_path, 'a.mp4')
-            auto.process_sounds(file_path, 'a.txt')
 
 
