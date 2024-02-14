@@ -296,13 +296,14 @@ def process_media(ori_path, audio_path, vector, mid_path):
 if __name__ == "__main__":
     file_path = 'uploads/锈铁1.mp4'
     mid_path = './mids'
+    output_path = './outputs'
     #process_audio(file_path, mid_path)
     #process_video(file_path, mid_path)
     match_vector = process_match('info_audio3.txt', 'info_video.txt')
     print(match_vector)
     cluster_vector = process_cluster(match_vector, 10, 0, 322)
     print(cluster_vector)
-    process_media(file_path, 'info_audio3.txt', cluster_vector, mid_path)
+    process_media(file_path, 'info_audio3.txt', cluster_vector, output_path)
 
 
 
